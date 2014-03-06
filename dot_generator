@@ -1,0 +1,111 @@
+#!/usr/bin/env ruby
+# (1) install graphviz
+# (2) run this at the root of your rails app
+# (3) dot -Tpng graph.dot -ograph.png
+
+
+class DotGenerator
+
+  def self.generate(args={})
+    options = {}
+    if output_file_path = args[:output_file_path]
+      output_file = File.new(output_file_path, "w+")
+      options[:output_file] = output_file
+    end
+
+    it = new(options)
+    it.generate
+  ensure
+    output_file && output_file.respond_to?(:close) && output_file.close
+  end
+
+  def initialize(options={})
+    @root = options[:root] || "."
+    @output_file = options[:output_file] || STDOUT
+    @relative_glob = options[:relative_glob] || "app/models/*rb"
+    @filter_method = options[:filter_method] || "ar_class_filter"
+    require "#{@root}/config/environment"
+  end
+
+  def generate
+    begin
+      Dir.glob("#{@root}/#{@relative_glob}") { |model_file| require model_file }
+      @output_file.puts "digraph x {"
+
+      Dir.glob("#{@root}/#{@relative_glob}") do |model_file|
+
+        classname = model_file.match(/([a-z_]+).rb/)[1].camelize
+
+        klass = Kernel.const_get(classname) rescue false
+        warn "skipping #{classname}" unless klass
+
+        if klass && send(@filter_method, klass)
+
+          @output_file.puts classname
+
+          klass.reflect_on_all_associations.each do |a|
+
+            label = (a.macro.to_s =~ /many/) ? "*" : "1"
+
+            @output_file.puts "#{classname} -> #{a.name.to_s.camelize.singularize} [label=\"#{label}\"]"
+
+          end
+
+        end
+
+      end
+
+    ensure
+      @output_file.puts "}"
+    end #begin/end (for ensure)
+  end # do_it
+
+  protected
+
+  def no_filter(klass)
+    true
+  end
+
+  def ar_class_filter(klass)
+    ActiveRecord::Base >= klass
+  end
+
+end # class
+
+usage =<<-EOU
+# PREP:
+brew install graphviz
+cd ../your_rails_project_root_dir
+cd ../
+git clone <rails_visualizer_repo_url>
+cd your_rails_project_root_dir
+
+# RUN IT:
+../rails_visualizer/dot_generator -f your_graph.dot
+
+# PROCESS IT:
+dot -Tpng your_graph.dot -oyour_graph.png
+
+# VIEW THE RESULTS:
+open your_graph.png
+
+# SEE THIS HELP:
+dot_generator --help
+EOU
+
+args = {}
+keep_going = false
+if ARGV.size > 1
+  flag = ARGV.shift
+  keep_going = true unless ['--help','-h','-?','--?'].include?(flag)
+
+  file_path_arg = ARGV.shift
+  args[:output_file_path] = file_path_arg
+end
+
+unless keep_going
+  warn(usage)
+  exit(-1)
+end
+
+DotGenerator.generate(args)
